@@ -9,6 +9,11 @@ enum Tool: String, CaseIterable, Identifiable {
     case sticky
 
     var id: String { rawValue }
+
+    /// Tools with an options panel (color, thickness, palette).
+    var hasOptions: Bool {
+        self == .pen || self == .sticky
+    }
 }
 
 struct ShareItem: Identifiable {
@@ -30,6 +35,10 @@ final class BoardViewModel {
     private(set) var revision: Int = 0
     var selection: Set<UUID> = []
     var tool: Tool = .select
+    /// Whether the active tool's options panel is showing. It opens when a
+    /// tool is picked, toggles when the active tool is tapped again, and
+    /// fades away when the board is touched.
+    var showToolOptions = false
     var penKind: PenKind = .pen
     var penColor: PaintColor = .themeForeground
     var penWidth: Double = 4
@@ -249,6 +258,9 @@ final class BoardViewModel {
     }
 
     func select(_ ids: Set<UUID>) {
+        if let editing = editingTextID, !ids.contains(editing) {
+            endEditing()
+        }
         selection = ids
         onRedraw?()
     }
@@ -307,11 +319,26 @@ final class BoardViewModel {
         if editingTextID != nil {
             endEditing()
         }
-        tool = newTool
+        if newTool == tool {
+            if newTool.hasOptions {
+                showToolOptions.toggle()
+            }
+        } else {
+            tool = newTool
+            showToolOptions = newTool.hasOptions
+        }
         if newTool != .select {
             selection = []
         }
         onRedraw?()
+    }
+
+    /// Closes the tool options panel. Returns true if it was open.
+    @discardableResult
+    func dismissPopups() -> Bool {
+        guard showToolOptions else { return false }
+        showToolOptions = false
+        return true
     }
 
     func setPenKind(_ kind: PenKind) {

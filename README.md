@@ -6,14 +6,15 @@ No accounts, no networking. Everything is stored locally.
 ## Features
 
 - **Home:** a grid of board thumbnails sorted by last edit. Tap **+** to create a board. Touch and hold a board to rename, duplicate or delete it.
-- **Infinite canvas:** pan with two fingers and pinch to zoom. The exact viewport is restored when you reopen a board.
+- **Infinite canvas:** drag empty space with one finger to move around (with momentum), or use two fingers anywhere; pinch to zoom. In Pen mode one finger draws; once you use an Apple Pencil, fingers move the board instead. The exact viewport is restored when you reopen a board.
 - **Objects:**
   - **Text:** tap to add, double-tap to edit. You can set the font, size, bold, italic, alignment and color.
   - **Images:** add from the photo library or camera. They're downscaled to 2048 px and compressed on import. You can move, resize, rotate and set opacity.
   - **Sticky notes:** use the theme's palette and hold editable text.
   - **Freehand:** pen, highlighter and stroke eraser, with Apple Pencil pressure. Double-tap the Pencil to toggle the eraser.
 - **Interaction:**
-  - Select, lasso, and two-finger tap to add or remove objects from the selection.
+  - Tap to select. Touch and hold empty space, then drag, to lasso. Two-finger tap adds or removes objects from the selection.
+- **Popups:** the pen and sticky options open when you pick the tool (tap the tool again to toggle them). They, and the selection panel, fade away when you tap anywhere on the board.
   - Move, resize with corner handles, rotate (snaps every 45°), duplicate and delete.
   - Bring forward, send backward, lock and unlock.
   - Unlimited undo and redo for the session.

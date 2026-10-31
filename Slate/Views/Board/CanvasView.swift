@@ -56,6 +56,10 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
         case resizing(corner: Int)
         case rotating
         case pendingTap
+        /// Finger down on empty space: becomes a pan if it moves, a lasso if
+        /// held still, or a tap that clears the selection.
+        case pendingEmpty
+        case panning
     }
 
     private enum Handle {
@@ -83,6 +87,19 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
     private var tappedObjectID: UUID?
     private var eraserScreenPoint: CGPoint?
     private var lastLayoutSize: CGSize = .zero
+    /// True when this touch closed an open popup; a plain tap then does
+    /// nothing else (no dot, no new sticky note).
+    private var touchDismissedPopup = false
+    /// Once an Apple Pencil is used, fingers pan in Pen mode instead of drawing.
+    private var pencilSeen = false
+    private var lastPanScreen: CGPoint = .zero
+    private var panSamples: [(time: TimeInterval, point: CGPoint)] = []
+    private var inertiaLink: CADisplayLink?
+    private var inertiaVelocity: CGPoint = .zero
+    private var lastInertiaTimestamp: CFTimeInterval = 0
+
+    private static let panThreshold: CGFloat = 6
+    private static let lassoHoldDelay: TimeInterval = 0.35
 
     private static let handleRadius: CGFloat = 24
     private static let rotateHandleDistance: CGFloat = 30
@@ -143,7 +160,7 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
 
         isAccessibilityElement = true
         accessibilityLabel = "Whiteboard canvas"
-        accessibilityHint = "Use two fingers to pan and pinch to zoom."
+        accessibilityHint = "Drag empty space to move around and pinch to zoom. Touch and hold, then drag, to lasso select."
     }
 
     func attach(_ viewModel: BoardViewModel) {
@@ -359,8 +376,13 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
             return
         }
 
+        stopInertia()
         activeTouch = touch
         isPencilStroke = touch.type == .pencil
+        if isPencilStroke {
+            pencilSeen = true
+        }
+        touchDismissedPopup = viewModel.dismissPopups()
         let screen = touch.location(in: self)
         let world = viewModel.viewport.toWorld(screen)
         startScreen = screen
@@ -369,6 +391,10 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
         didMove = false
 
         switch viewModel.tool {
+        case .pen where pencilSeen && !isPencilStroke:
+            // Apple Pencil draws; fingers move the board.
+            mode = .pendingEmpty
+            lastPanScreen = screen
         case .pen:
             if viewModel.penKind == .eraser {
                 mode = .erasing
@@ -409,9 +435,23 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
             mode = .moving
             viewModel.beginInteraction()
         } else {
-            mode = .lasso
-            lassoPoints = [world]
+            mode = .pendingEmpty
+            lastPanScreen = screen
+            perform(#selector(lassoHoldFired), with: nil, afterDelay: CanvasUIView.lassoHoldDelay)
         }
+    }
+
+    /// Touch and hold on empty space, then drag, to lasso-select.
+    @objc private func lassoHoldFired() {
+        guard mode == .pendingEmpty, !didMove, viewModel?.tool == .select else { return }
+        mode = .lasso
+        lassoPoints = [startWorld]
+        Haptics.selection()
+        overlay.setNeedsDisplay()
+    }
+
+    private func cancelLassoHold() {
+        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(lassoHoldFired), object: nil)
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -420,6 +460,12 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
         let world = viewModel.viewport.toWorld(screen)
         if !didMove && screen.distance(to: startScreen) > 4 {
             didMove = true
+        }
+        if (mode == .pendingEmpty || mode == .pendingTap) && screen.distance(to: startScreen) > CanvasUIView.panThreshold {
+            cancelLassoHold()
+            mode = .panning
+            lastPanScreen = startScreen
+            panSamples = []
         }
 
         switch mode {
@@ -456,7 +502,15 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
             if let originalObject {
                 viewModel.rotate(originalObject, toward: world)
             }
-        case .pendingTap, .idle:
+        case .panning:
+            viewModel.viewport.pan(by: screen - lastPanScreen)
+            lastPanScreen = screen
+            panSamples.append((touch.timestamp, screen))
+            if panSamples.count > 6 {
+                panSamples.removeFirst(panSamples.count - 6)
+            }
+            refresh()
+        case .pendingTap, .pendingEmpty, .idle:
             break
         }
         lastWorld = world
@@ -469,7 +523,9 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
 
         switch mode {
         case .drawing:
-            viewModel.addStroke(points: livePoints, pressures: livePressures)
+            if !(touchDismissedPopup && !didMove) {
+                viewModel.addStroke(points: livePoints, pressures: livePressures)
+            }
         case .erasing:
             viewModel.endInteraction()
         case .lasso:
@@ -486,9 +542,14 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
         case .resizing, .rotating:
             viewModel.endInteraction()
         case .pendingTap:
-            if !didMove {
+            if !didMove && !touchDismissedPopup {
                 viewModel.handleTap(at: world, tolerance: tolerance)
             }
+        case .pendingEmpty:
+            viewModel.clearSelection()
+        case .panning:
+            viewModel.viewportDidChange()
+            startInertia(endTime: touch.timestamp)
         case .idle:
             break
         }
@@ -504,13 +565,18 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
         switch mode {
         case .erasing, .moving, .resizing, .rotating:
             viewModel?.cancelInteraction()
-        case .idle, .drawing, .lasso, .pendingTap:
+        case .panning:
+            viewModel?.viewportDidChange()
+        case .idle, .drawing, .lasso, .pendingTap, .pendingEmpty:
             break
         }
         resetInteractionState()
     }
 
     private func resetInteractionState() {
+        cancelLassoHold()
+        panSamples = []
+        touchDismissedPopup = false
         mode = .idle
         activeTouch = nil
         isPencilStroke = false
@@ -523,6 +589,57 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
         tappedObjectID = nil
         eraserScreenPoint = nil
         overlay.setNeedsDisplay()
+    }
+
+    // MARK: Pan momentum
+
+    private func startInertia(endTime: TimeInterval) {
+        guard let first = panSamples.first, let last = panSamples.last else { return }
+        // Ignore if the finger rested before lifting.
+        guard endTime - last.time < 0.05, last.time - first.time > 0.005 else { return }
+        let elapsed = CGFloat(last.time - first.time)
+        let velocity = (last.point - first.point) / elapsed
+        guard velocity.length > 250 else { return }
+        let maxSpeed: CGFloat = 5000
+        inertiaVelocity = velocity.length > maxSpeed ? velocity * (maxSpeed / velocity.length) : velocity
+        lastInertiaTimestamp = 0
+        let link = CADisplayLink(target: self, selector: #selector(stepInertia(_:)))
+        link.add(to: .main, forMode: .common)
+        inertiaLink = link
+    }
+
+    @objc private func stepInertia(_ link: CADisplayLink) {
+        guard let viewModel else {
+            stopInertia()
+            return
+        }
+        if lastInertiaTimestamp == 0 {
+            lastInertiaTimestamp = link.timestamp
+            return
+        }
+        let dt = CGFloat(min(link.timestamp - lastInertiaTimestamp, 1.0 / 30.0))
+        lastInertiaTimestamp = link.timestamp
+        viewModel.viewport.pan(by: inertiaVelocity * dt)
+        // Same feel as UIScrollView's normal deceleration rate.
+        inertiaVelocity = inertiaVelocity * pow(0.135, dt)
+        refresh()
+        if inertiaVelocity.length < 20 {
+            stopInertia()
+        }
+    }
+
+    private func stopInertia() {
+        guard let link = inertiaLink else { return }
+        link.invalidate()
+        inertiaLink = nil
+        viewModel?.viewportDidChange()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil {
+            stopInertia()
+        }
     }
 
     private var eraserRadius: CGFloat {
@@ -565,6 +682,7 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
         guard let viewModel else { return }
         switch recognizer.state {
         case .began, .changed:
+            stopInertia()
             viewModel.viewport.zoom(by: Double(recognizer.scale), around: recognizer.location(in: self))
             recognizer.scale = 1
             refresh()
@@ -579,6 +697,7 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
         guard let viewModel else { return }
         switch recognizer.state {
         case .began, .changed:
+            stopInertia()
             viewModel.viewport.pan(by: recognizer.translation(in: self))
             recognizer.setTranslation(.zero, in: self)
             refresh()

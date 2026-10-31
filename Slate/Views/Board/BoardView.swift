@@ -191,10 +191,10 @@ struct BoardView: View {
             } else {
                 if !viewModel.selection.isEmpty {
                     InspectorView(viewModel: viewModel, showFontPicker: $showFontPicker)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                } else if ToolOptionsView.hasOptions(for: viewModel.tool) {
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
+                } else if viewModel.showToolOptions && viewModel.tool.hasOptions {
                     ToolOptionsView(viewModel: viewModel)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottom)))
                 }
                 MainToolbarView(viewModel: viewModel,
                                 onPhotoLibrary: { showPhotoPicker = true },
@@ -204,6 +204,7 @@ struct BoardView: View {
         .frame(maxWidth: 560)
         .animation(.snappy(duration: 0.25), value: viewModel.selection.isEmpty)
         .animation(.snappy(duration: 0.25), value: viewModel.tool)
+        .animation(.easeOut(duration: 0.2), value: viewModel.showToolOptions)
         .animation(.snappy(duration: 0.25), value: viewModel.editingTextID)
     }
 }

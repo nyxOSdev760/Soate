@@ -78,6 +78,7 @@ struct MainToolbarView: View {
             icon(systemImage, isSelected: isSelected)
         }
         .accessibilityLabel(label)
+        .accessibilityHint(tool.hasOptions ? "Tap again to show or hide options." : "")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
@@ -98,10 +99,6 @@ struct MainToolbarView: View {
 /// Options for the active tool when nothing is selected.
 struct ToolOptionsView: View {
     @Bindable var viewModel: BoardViewModel
-
-    static func hasOptions(for tool: Tool) -> Bool {
-        tool == .pen || tool == .sticky
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
