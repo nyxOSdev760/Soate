@@ -125,10 +125,6 @@ final class CanvasRenderer {
     }
 
     func draw(_ object: BoardObject, in ctx: CGContext, theme: Theme) {
-        if case .connector(let connector) = object.content {
-            drawConnector(connector, in: ctx, theme: theme)
-            return
-        }
         ctx.saveGState()
         let center = object.center
         ctx.translateBy(x: center.x, y: center.y)
@@ -141,94 +137,10 @@ final class CanvasRenderer {
             drawText(text, in: rect, theme: theme)
         case .image(let image):
             drawImage(image, in: rect, ctx: ctx)
-        case .shape(let shape):
-            drawShape(shape, in: rect, ctx: ctx, theme: theme)
         case .sticky(let sticky):
             drawSticky(sticky, in: rect, ctx: ctx, theme: theme)
         case .stroke(let stroke):
             drawStroke(stroke, id: object.id, size: object.frame.size, ctx: ctx, theme: theme)
-        case .connector:
-            break
-        }
-        ctx.restoreGState()
-    }
-
-    // MARK: Shapes
-
-    static func shapePath(_ kind: ShapeKind, in rect: CGRect) -> CGPath {
-        switch kind {
-        case .rectangle:
-            return CGPath(rect: rect, transform: nil)
-        case .roundedRectangle:
-            let radius = min(min(rect.width, rect.height) * 0.18, 36)
-            return CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
-        case .ellipse:
-            return CGPath(ellipseIn: rect, transform: nil)
-        case .triangle:
-            let path = CGMutablePath()
-            path.move(to: CGPoint(x: rect.midX, y: rect.minY))
-            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
-            path.closeSubpath()
-            return path
-        case .line, .arrow:
-            let path = CGMutablePath()
-            path.move(to: CGPoint(x: rect.minX, y: rect.midY))
-            path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
-            return path
-        }
-    }
-
-    private func drawShape(_ shape: ShapeContent, in rect: CGRect, ctx: CGContext, theme: Theme) {
-        let path = CanvasRenderer.shapePath(shape.kind, in: rect)
-        if let fill = shape.fill.uiColor(in: theme) {
-            ctx.addPath(path)
-            ctx.setFillColor(fill.cgColor)
-            ctx.fillPath()
-        }
-        if shape.strokeWidth > 0, let stroke = shape.stroke.uiColor(in: theme) {
-            ctx.addPath(path)
-            ctx.setStrokeColor(stroke.cgColor)
-            ctx.setLineWidth(CGFloat(shape.strokeWidth))
-            ctx.setLineJoin(.round)
-            ctx.setLineCap(.round)
-            ctx.strokePath()
-        }
-    }
-
-    private func drawConnector(_ connector: ConnectorContent, in ctx: CGContext, theme: Theme) {
-        guard let color = connector.stroke.uiColor(in: theme) else { return }
-        let width = CGFloat(max(connector.strokeWidth, 0.5))
-        let start = connector.start
-        let end = connector.end
-        let vector = end - start
-        let length = vector.length
-
-        ctx.saveGState()
-        ctx.setStrokeColor(color.cgColor)
-        ctx.setFillColor(color.cgColor)
-        ctx.setLineWidth(width)
-        ctx.setLineCap(.round)
-        ctx.setLineJoin(.round)
-
-        if connector.hasArrowhead, length > 0.5 {
-            let direction = vector / length
-            let headLength = min(max(12, width * 4), length * 0.7)
-            let headHalfWidth = headLength * 0.5
-            let base = end - direction * headLength
-            let normal = CGPoint(x: -direction.y, y: direction.x)
-            ctx.move(to: start)
-            ctx.addLine(to: base + direction * min(width * 0.5, headLength * 0.5))
-            ctx.strokePath()
-            ctx.move(to: end)
-            ctx.addLine(to: base + normal * headHalfWidth)
-            ctx.addLine(to: base - normal * headHalfWidth)
-            ctx.closePath()
-            ctx.fillPath()
-        } else {
-            ctx.move(to: start)
-            ctx.addLine(to: end)
-            ctx.strokePath()
         }
         ctx.restoreGState()
     }

@@ -6,6 +6,7 @@ import SwiftUI
 struct InspectorView: View {
     @Bindable var viewModel: BoardViewModel
     @Binding var showFontPicker: Bool
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     var body: some View {
         let objects = viewModel.selectedObjects
@@ -23,7 +24,7 @@ struct InspectorView: View {
                     }
                     .scrollBounceBehavior(.basedOnSize)
                 }
-                .frame(maxHeight: 330)
+                .frame(maxHeight: verticalSizeClass == .compact ? 140 : 280)
             } else if !objects.isEmpty {
                 Label("Locked. Unlock to move or edit.", systemImage: "lock.fill")
                     .font(.footnote)
@@ -41,55 +42,60 @@ struct InspectorView: View {
     private func actionRow(objects: [BoardObject], editable: [BoardObject]) -> some View {
         let isLocked = viewModel.selectionIsLocked
         let canEditText = objects.count == 1 && (objects.first?.isEditableText ?? false) && !isLocked
-        return HStack(spacing: 4) {
-            Text(objects.count == 1 ? (objects.first?.kindName ?? "") : "\(objects.count) Selected")
-                .font(.subheadline.weight(.semibold))
-                .lineLimit(1)
-                .padding(.trailing, 4)
-
-            Spacer(minLength: 0)
-
-            if canEditText, let id = objects.first?.id {
-                actionButton("character.cursor.ibeam", label: "Edit Text") {
-                    viewModel.beginEditing(id)
+        return VStack(alignment: .leading, spacing: 8) {
+            // Title row: what is selected, plus deselect.
+            HStack(spacing: 8) {
+                Text(objects.count == 1 ? (objects.first?.kindName ?? "") : "\(objects.count) Selected")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Spacer(minLength: 0)
+                actionButton("xmark", label: "Deselect") {
+                    viewModel.clearSelection()
                 }
+                .keyboardShortcut(.escape, modifiers: [])
             }
-            actionButton("plus.square.on.square", label: "Duplicate") {
-                viewModel.duplicateSelection()
-            }
-            .keyboardShortcut("d", modifiers: .command)
-            actionButton("square.2.layers.3d.top.filled", label: "Bring Forward") {
-                viewModel.bringForward()
-            }
-            .keyboardShortcut("]", modifiers: .command)
-            actionButton("square.2.layers.3d.bottom.filled", label: "Send Backward") {
-                viewModel.sendBackward()
-            }
-            .keyboardShortcut("[", modifiers: .command)
-            actionButton(isLocked ? "lock.fill" : "lock.open", label: isLocked ? "Unlock" : "Lock") {
-                viewModel.toggleLock()
-            }
-            Menu {
-                ForEach(ExportFormat.allCases) { format in
-                    Button {
-                        viewModel.export(format: format, selectionOnly: true)
-                    } label: {
-                        Label("Export Selection as \(format.title)", systemImage: format.systemImage)
+            // Actions row: sized to fit a 375-390 pt wide iPhone.
+            HStack(spacing: 6) {
+                if canEditText, let id = objects.first?.id {
+                    actionButton("character.cursor.ibeam", label: "Edit Text") {
+                        viewModel.beginEditing(id)
                     }
                 }
-            } label: {
-                actionIcon("square.and.arrow.up")
+                actionButton("plus.square.on.square", label: "Duplicate") {
+                    viewModel.duplicateSelection()
+                }
+                .keyboardShortcut("d", modifiers: .command)
+                actionButton("square.2.layers.3d.top.filled", label: "Bring Forward") {
+                    viewModel.bringForward()
+                }
+                .keyboardShortcut("]", modifiers: .command)
+                actionButton("square.2.layers.3d.bottom.filled", label: "Send Backward") {
+                    viewModel.sendBackward()
+                }
+                .keyboardShortcut("[", modifiers: .command)
+                actionButton(isLocked ? "lock.fill" : "lock.open", label: isLocked ? "Unlock" : "Lock") {
+                    viewModel.toggleLock()
+                }
+                Menu {
+                    ForEach(ExportFormat.allCases) { format in
+                        Button {
+                            viewModel.export(format: format, selectionOnly: true)
+                        } label: {
+                            Label("Export Selection as \(format.title)", systemImage: format.systemImage)
+                        }
+                    }
+                } label: {
+                    actionIcon("square.and.arrow.up")
+                }
+                .accessibilityLabel("Export Selection")
+                Spacer(minLength: 0)
+                actionButton("trash", label: "Delete", role: .destructive) {
+                    viewModel.deleteSelection()
+                }
+                .disabled(editable.isEmpty)
+                .keyboardShortcut(.delete, modifiers: [])
             }
-            .accessibilityLabel("Export Selection")
-            actionButton("trash", label: "Delete", role: .destructive) {
-                viewModel.deleteSelection()
-            }
-            .disabled(editable.isEmpty)
-            .keyboardShortcut(.delete, modifiers: [])
-            actionButton("xmark", label: "Deselect") {
-                viewModel.clearSelection()
-            }
-            .keyboardShortcut(.escape, modifiers: [])
         }
         .buttonStyle(.plain)
     }
@@ -123,12 +129,6 @@ struct InspectorView: View {
             }
             if let sticky = editable.lazy.compactMap({ $0.stickyContent }).first {
                 stickySection(sticky, theme: theme)
-            }
-            if let shape = editable.lazy.compactMap({ $0.shapeContent }).first {
-                shapeSection(shape, theme: theme)
-            }
-            if let connector = editable.lazy.compactMap({ $0.connectorContent }).first {
-                connectorSection(connector, theme: theme)
             }
             if let stroke = editable.lazy.compactMap({ $0.strokeContent }).first {
                 strokeSection(stroke, theme: theme)
@@ -213,41 +213,6 @@ struct InspectorView: View {
         return nil
     }
 
-    private func shapeSection(_ shape: ShapeContent, theme: Theme) -> some View {
-        InspectorSection(title: "Shape") {
-            labeled("Fill") {
-                ColorSwatchRow(selected: shape.fill, theme: theme, allowsClear: true, allowsAuto: true) { color in
-                    viewModel.setFill(color)
-                }
-            }
-            labeled("Stroke") {
-                ColorSwatchRow(selected: shape.stroke, theme: theme, allowsClear: true, allowsAuto: true) { color in
-                    viewModel.setStrokeColor(color)
-                }
-            }
-            widthSlider(value: shape.strokeWidth, range: 0...40)
-        }
-    }
-
-    private func connectorSection(_ connector: ConnectorContent, theme: Theme) -> some View {
-        InspectorSection(title: connector.hasArrowhead ? "Arrow" : "Line") {
-            Picker("Ends", selection: Binding(get: { connector.hasArrowhead }, set: { viewModel.setArrowhead($0) })) {
-                Text("Line").tag(false)
-                Text("Arrow").tag(true)
-            }
-            .pickerStyle(.segmented)
-            ColorSwatchRow(selected: connector.stroke, theme: theme, allowsClear: false, allowsAuto: true) { color in
-                viewModel.setStrokeColor(color)
-            }
-            widthSlider(value: connector.strokeWidth, range: 0.5...40)
-            if connector.startBinding != nil || connector.endBinding != nil {
-                Label("Attached ends follow their objects.", systemImage: "link")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
     private func strokeSection(_ stroke: StrokeContent, theme: Theme) -> some View {
         InspectorSection(title: stroke.isHighlighter ? "Highlight" : "Drawing") {
             ColorSwatchRow(selected: stroke.color, theme: theme, allowsClear: false, allowsAuto: true) { color in
@@ -273,15 +238,6 @@ struct InspectorView: View {
     }
 
     // MARK: Controls
-
-    private func labeled<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            content()
-        }
-    }
 
     private func widthSlider(value: Double, range: ClosedRange<Double>) -> some View {
         let upper = max(range.upperBound, value)

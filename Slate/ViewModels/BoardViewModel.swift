@@ -5,7 +5,6 @@ import Observation
 enum Tool: String, CaseIterable, Identifiable {
     case select
     case text
-    case shape
     case pen
     case sticky
 
@@ -31,7 +30,6 @@ final class BoardViewModel {
     private(set) var revision: Int = 0
     var selection: Set<UUID> = []
     var tool: Tool = .select
-    var shapeKind: ShapeKind = .rectangle
     var penKind: PenKind = .pen
     var penColor: PaintColor = .themeForeground
     var penWidth: Double = 4
@@ -52,7 +50,6 @@ final class BoardViewModel {
     @ObservationIgnored var onRedraw: (() -> Void)?
     @ObservationIgnored private var interactionSnapshot: BoardSnapshot?
     @ObservationIgnored private var interactionRecorded = false
-    @ObservationIgnored private var lastSnapTarget: UUID?
     @ObservationIgnored private var lastRotationSnapped = false
     @ObservationIgnored private var lastDrawingPenKind: PenKind = .pen
     @ObservationIgnored private var lastTextFont: FontFamily = .sanFrancisco
@@ -81,7 +78,6 @@ final class BoardViewModel {
         autosave.onResult = { [weak self] result in
             self?.handleSaveResult(result)
         }
-        resolveConnectors()
         if store.isStorageLow {
             storageWarning = "Storage is almost full. Free up space to keep saving."
         }
@@ -180,7 +176,6 @@ final class BoardViewModel {
         let before = snapshot()
         let pushed = history.record(before, coalescingKey: coalescingKey)
         change(&board)
-        resolveConnectors()
         if pushed && snapshot() == before {
             history.discardLast()
             return
@@ -206,7 +201,6 @@ final class BoardViewModel {
     func beginInteraction() {
         interactionSnapshot = snapshot()
         interactionRecorded = false
-        lastSnapTarget = nil
         lastRotationSnapped = false
     }
 
@@ -220,7 +214,6 @@ final class BoardViewModel {
         let changed = interactionRecorded
         interactionSnapshot = nil
         interactionRecorded = false
-        lastSnapTarget = nil
         if changed {
             commitChange()
         } else {
@@ -236,7 +229,6 @@ final class BoardViewModel {
         }
         interactionSnapshot = nil
         interactionRecorded = false
-        lastSnapTarget = nil
         onRedraw?()
     }
 
@@ -247,52 +239,7 @@ final class BoardViewModel {
                 board.objects[index] = object
             }
         }
-        resolveConnectors()
         liveChange()
-    }
-
-    // MARK: Connectors
-
-    /// Recomputes endpoints of every connector bound to an object so lines and
-    /// arrows follow the objects they connect.
-    private func resolveConnectors() {
-        guard board.objects.contains(where: { $0.isConnector }) else { return }
-        var lookup: [UUID: BoardObject] = [:]
-        for object in board.objects where !object.isConnector {
-            lookup[object.id] = object
-        }
-        for index in board.objects.indices {
-            guard case .connector(var connector) = board.objects[index].content else { continue }
-            let startObject = connector.startBinding.flatMap { lookup[$0] }
-            let endObject = connector.endBinding.flatMap { lookup[$0] }
-            if connector.startBinding != nil && startObject == nil {
-                connector.startBinding = nil
-            }
-            if connector.endBinding != nil && endObject == nil {
-                connector.endBinding = nil
-            }
-            let startReference = endObject?.center ?? connector.end
-            let endReference = startObject?.center ?? connector.start
-            if let startObject {
-                connector.start = ConnectorGeometry.anchor(on: startObject, toward: startReference)
-            }
-            if let endObject {
-                connector.end = ConnectorGeometry.anchor(on: endObject, toward: endReference)
-            }
-            board.objects[index].content = .connector(connector)
-            board.objects[index].frame = connector.bounds
-        }
-    }
-
-    private func snapTarget(at point: CGPoint, excluding: Set<UUID>) -> BoardObject? {
-        ConnectorGeometry.snapTarget(at: point, in: board.objects, excluding: excluding, tolerance: 12 / zoom)
-    }
-
-    private func noteSnap(_ target: UUID?) {
-        if let target, target != lastSnapTarget {
-            Haptics.light()
-        }
-        lastSnapTarget = target
     }
 
     // MARK: Hit testing and selection
@@ -504,84 +451,6 @@ final class BoardViewModel {
         beginEditing(object.id)
     }
 
-    /// A tap with the shape tool inserts a default-sized shape.
-    func insertDefaultShape(kind: ShapeKind, at point: CGPoint) {
-        let unit = 1 / zoom
-        let strokeWidth = Double(3 * unit)
-        let object: BoardObject
-        if kind.isConnector {
-            object = BoardObject.makeConnector(start: CGPoint(x: point.x - 80 * unit, y: point.y),
-                                               end: CGPoint(x: point.x + 80 * unit, y: point.y),
-                                               hasArrowhead: kind == .arrow,
-                                               strokeWidth: strokeWidth)
-        } else {
-            let size: CGSize
-            switch kind {
-            case .ellipse: size = CGSize(width: 140 * unit, height: 140 * unit)
-            case .triangle: size = CGSize(width: 160 * unit, height: 140 * unit)
-            default: size = CGSize(width: 180 * unit, height: 120 * unit)
-            }
-            object = BoardObject.makeShape(kind: kind, frame: CGRect(center: point, size: size), strokeWidth: strokeWidth)
-        }
-        perform { $0.objects.append(object) }
-        selection = [object.id]
-        tool = .select
-        Haptics.light()
-    }
-
-    /// Starts a drag-to-create shape. Returns the new object's ID.
-    func beginShapeCreation(kind: ShapeKind, from start: CGPoint, to end: CGPoint) -> UUID {
-        recordInteractionIfNeeded()
-        let strokeWidth = Double(3 / zoom)
-        let object: BoardObject
-        if kind.isConnector {
-            let target = snapTarget(at: start, excluding: [])
-            object = BoardObject.makeConnector(start: start,
-                                               end: end,
-                                               hasArrowhead: kind == .arrow,
-                                               strokeWidth: strokeWidth,
-                                               startBinding: target?.id)
-        } else {
-            object = BoardObject.makeShape(kind: kind, frame: CGRect(corner: start, corner: end), strokeWidth: strokeWidth)
-        }
-        board.objects.append(object)
-        selection = [object.id]
-        resolveConnectors()
-        liveChange()
-        return object.id
-    }
-
-    /// Updates a shape being created. Returns the ID of the object the
-    /// connector end currently snaps to, if any.
-    @discardableResult
-    func updateShapeCreation(id: UUID, from start: CGPoint, to end: CGPoint) -> UUID? {
-        guard let index = index(of: id) else { return nil }
-        var object = board.objects[index]
-        var snapped: UUID?
-        if case .connector(var connector) = object.content {
-            let target = snapTarget(at: end, excluding: [id])
-            let binding = target?.id == connector.startBinding ? nil : target?.id
-            connector.end = end
-            connector.endBinding = binding
-            object.content = .connector(connector)
-            object.frame = connector.bounds
-            snapped = binding
-            noteSnap(binding)
-        } else {
-            var rect = CGRect(corner: start, corner: end)
-            rect.size.width = max(rect.width, 2 / zoom)
-            rect.size.height = max(rect.height, 2 / zoom)
-            object.frame = rect
-        }
-        liveReplace([object])
-        return snapped
-    }
-
-    func finishShapeCreation() {
-        endInteraction()
-        tool = .select
-    }
-
     func insertImage(_ image: UIImage) {
         do {
             let imported = try imageStore.importImage(image)
@@ -607,25 +476,10 @@ final class BoardViewModel {
 
     func moveObjects(_ originals: [UUID: BoardObject], by delta: CGPoint) {
         guard !originals.isEmpty else { return }
-        let movingIDs = Set(originals.keys)
-        var updated: [BoardObject] = []
-        for (_, original) in originals {
+        let updated: [BoardObject] = originals.values.map { original in
             var object = original
-            if case .connector(var connector) = original.content {
-                connector.start = connector.start + delta
-                connector.end = connector.end + delta
-                if let binding = connector.startBinding, !movingIDs.contains(binding) {
-                    connector.startBinding = nil
-                }
-                if let binding = connector.endBinding, !movingIDs.contains(binding) {
-                    connector.endBinding = nil
-                }
-                object.content = .connector(connector)
-                object.frame = connector.bounds
-            } else {
-                object.frame = original.frame.offsetBy(dx: delta.x, dy: delta.y)
-            }
-            updated.append(object)
+            object.frame = original.frame.offsetBy(dx: delta.x, dy: delta.y)
+            return object
         }
         liveReplace(updated)
     }
@@ -633,7 +487,7 @@ final class BoardViewModel {
     /// Resizes from a corner handle (0 top-left, 1 top-right, 2 bottom-right,
     /// 3 bottom-left). The opposite corner stays fixed, also when rotated.
     func resize(_ original: BoardObject, corner: Int, to point: CGPoint) {
-        guard !original.isLocked, !original.isConnector, (0..<4).contains(corner) else { return }
+        guard !original.isLocked, (0..<4).contains(corner) else { return }
         let signs: [(CGFloat, CGFloat)] = [(-1, -1), (1, -1), (1, 1), (-1, 1)]
         let (sx, sy) = signs[corner]
         let angle = CGFloat(original.rotation)
@@ -661,7 +515,7 @@ final class BoardViewModel {
     }
 
     func rotate(_ original: BoardObject, toward point: CGPoint) {
-        guard !original.isLocked, original.supportsRotation else { return }
+        guard !original.isLocked else { return }
         let vector = point - original.center
         guard vector.length > 1 / zoom else { return }
         var angle = Double(atan2(vector.y, vector.x)) + Double.pi / 2
@@ -678,29 +532,6 @@ final class BoardViewModel {
         var object = original
         object.rotation = GeometryUtils.normalizedAngle(angle)
         liveReplace([object])
-    }
-
-    /// Drags a connector endpoint, snapping it to objects underneath.
-    /// Returns the snap target's ID.
-    @discardableResult
-    func moveConnectorEndpoint(_ original: BoardObject, isStart: Bool, to point: CGPoint) -> UUID? {
-        guard !original.isLocked, case .connector(var connector) = original.content else { return nil }
-        let otherBinding = isStart ? connector.endBinding : connector.startBinding
-        let target = snapTarget(at: point, excluding: [original.id])
-        let binding = target?.id == otherBinding ? nil : target?.id
-        if isStart {
-            connector.start = point
-            connector.startBinding = binding
-        } else {
-            connector.end = point
-            connector.endBinding = binding
-        }
-        var object = original
-        object.content = .connector(connector)
-        object.frame = connector.bounds
-        liveReplace([object])
-        noteSnap(binding)
-        return binding
     }
 
     // MARK: Text editing
@@ -774,16 +605,7 @@ final class BoardViewModel {
             var copy = original
             copy.id = idMap[original.id] ?? UUID()
             copy.isLocked = false
-            if case .connector(var connector) = original.content {
-                connector.start = connector.start + CGPoint(x: offset, y: offset)
-                connector.end = connector.end + CGPoint(x: offset, y: offset)
-                connector.startBinding = connector.startBinding.flatMap { idMap[$0] }
-                connector.endBinding = connector.endBinding.flatMap { idMap[$0] }
-                copy.content = .connector(connector)
-                copy.frame = connector.bounds
-            } else {
-                copy.frame = original.frame.offsetBy(dx: offset, dy: offset)
-            }
+            copy.frame = original.frame.offsetBy(dx: offset, dy: offset)
             return copy
         }
         perform { $0.objects.append(contentsOf: copies) }
@@ -905,31 +727,15 @@ final class BoardViewModel {
         }
     }
 
-    func setFill(_ color: PaintColor) {
-        updateSelected("fill") { object in
-            object.modifyShape { $0.fill = color }
-        }
-    }
-
     func setStrokeColor(_ color: PaintColor) {
         updateSelected("stroke-color") { object in
-            object.modifyShape { $0.stroke = color }
-            object.modifyConnector { $0.stroke = color }
             object.modifyStroke { $0.color = color }
         }
     }
 
     func setStrokeWidth(_ width: Double) {
         updateSelected("stroke-width") { object in
-            object.modifyShape { $0.strokeWidth = width }
-            object.modifyConnector { $0.strokeWidth = width }
             object.modifyStroke { $0.width = width }
-        }
-    }
-
-    func setArrowhead(_ hasArrowhead: Bool) {
-        updateSelected("arrowhead") { object in
-            object.modifyConnector { $0.hasArrowhead = hasArrowhead }
         }
     }
 
@@ -978,7 +784,6 @@ final class BoardViewModel {
         }
         guard let previous = history.undo(current: snapshot()) else { return }
         apply(previous)
-        resolveConnectors()
         commitChange()
     }
 
@@ -988,7 +793,6 @@ final class BoardViewModel {
         }
         guard let next = history.redo(current: snapshot()) else { return }
         apply(next)
-        resolveConnectors()
         commitChange()
     }
 

@@ -2,44 +2,6 @@ import CoreGraphics
 import Foundation
 import UIKit
 
-enum ShapeKind: String, Codable, CaseIterable, Identifiable {
-    case rectangle
-    case roundedRectangle
-    case ellipse
-    case triangle
-    case line
-    case arrow
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .rectangle: return "Rectangle"
-        case .roundedRectangle: return "Rounded Rectangle"
-        case .ellipse: return "Ellipse"
-        case .triangle: return "Triangle"
-        case .line: return "Line"
-        case .arrow: return "Arrow"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .rectangle: return "rectangle"
-        case .roundedRectangle: return "app"
-        case .ellipse: return "circle"
-        case .triangle: return "triangle"
-        case .line: return "line.diagonal"
-        case .arrow: return "arrow.up.right"
-        }
-    }
-
-    /// Lines and arrows are stored as connectors that can attach to objects.
-    var isConnector: Bool {
-        self == .line || self == .arrow
-    }
-}
-
 enum PenKind: String, Codable, CaseIterable, Identifiable {
     case pen
     case highlighter
@@ -111,29 +73,6 @@ struct ImageContent: Codable, Equatable {
     var opacity: Double
 }
 
-struct ShapeContent: Codable, Equatable {
-    var kind: ShapeKind
-    var fill: PaintColor
-    var stroke: PaintColor
-    var strokeWidth: Double
-}
-
-/// A line or arrow. Endpoints are in world coordinates. When an endpoint is
-/// bound to an object it is recomputed to follow that object.
-struct ConnectorContent: Codable, Equatable {
-    var start: CGPoint
-    var end: CGPoint
-    var startBinding: UUID?
-    var endBinding: UUID?
-    var hasArrowhead: Bool
-    var stroke: PaintColor
-    var strokeWidth: Double
-
-    var bounds: CGRect {
-        CGRect.bounding([start, end])
-    }
-}
-
 struct StickyContent: Codable, Equatable {
     var text: String
     var color: PaintColor
@@ -160,8 +99,6 @@ struct StrokeContent: Codable, Equatable {
 enum ObjectContent: Codable, Equatable {
     case text(TextContent)
     case image(ImageContent)
-    case shape(ShapeContent)
-    case connector(ConnectorContent)
     case sticky(StickyContent)
     case stroke(StrokeContent)
 }
@@ -195,16 +132,9 @@ extension BoardObject {
         switch content {
         case .text: return "Text"
         case .image: return "Image"
-        case .shape(let shape): return shape.kind.title
-        case .connector(let connector): return connector.hasArrowhead ? "Arrow" : "Line"
         case .sticky: return "Sticky Note"
         case .stroke(let stroke): return stroke.isHighlighter ? "Highlight" : "Drawing"
         }
-    }
-
-    var isConnector: Bool {
-        if case .connector = content { return true }
-        return false
     }
 
     var isStroke: Bool {
@@ -217,10 +147,6 @@ extension BoardObject {
         case .text, .sticky: return true
         default: return false
         }
-    }
-
-    var supportsRotation: Bool {
-        !isConnector
     }
 
     var keepsAspectRatio: Bool {
@@ -237,16 +163,6 @@ extension BoardObject {
 
     var imageContent: ImageContent? {
         if case .image(let value) = content { return value }
-        return nil
-    }
-
-    var shapeContent: ShapeContent? {
-        if case .shape(let value) = content { return value }
-        return nil
-    }
-
-    var connectorContent: ConnectorContent? {
-        if case .connector(let value) = content { return value }
         return nil
     }
 
@@ -287,19 +203,6 @@ extension BoardObject {
         change(&value)
         content = .text(value)
         fitTextHeight()
-    }
-
-    mutating func modifyShape(_ change: (inout ShapeContent) -> Void) {
-        guard case .shape(var value) = content else { return }
-        change(&value)
-        content = .shape(value)
-    }
-
-    mutating func modifyConnector(_ change: (inout ConnectorContent) -> Void) {
-        guard case .connector(var value) = content else { return }
-        change(&value)
-        content = .connector(value)
-        frame = value.bounds
     }
 
     mutating func modifySticky(_ change: (inout StickyContent) -> Void) {
@@ -350,29 +253,5 @@ extension BoardObject {
         return BoardObject(id: id,
                            frame: CGRect(x: bounds.minX, y: bounds.minY, width: frameWidth, height: frameHeight),
                            content: .stroke(content))
-    }
-
-    static func makeShape(kind: ShapeKind, frame: CGRect, strokeWidth: Double) -> BoardObject {
-        let content = ShapeContent(kind: kind,
-                                   fill: .clear,
-                                   stroke: .themeForeground,
-                                   strokeWidth: strokeWidth)
-        return BoardObject(frame: frame, content: .shape(content))
-    }
-
-    static func makeConnector(start: CGPoint,
-                              end: CGPoint,
-                              hasArrowhead: Bool,
-                              strokeWidth: Double,
-                              startBinding: UUID? = nil,
-                              endBinding: UUID? = nil) -> BoardObject {
-        let content = ConnectorContent(start: start,
-                                       end: end,
-                                       startBinding: startBinding,
-                                       endBinding: endBinding,
-                                       hasArrowhead: hasArrowhead,
-                                       stroke: .themeForeground,
-                                       strokeWidth: strokeWidth)
-        return BoardObject(frame: content.bounds, content: .connector(content))
     }
 }

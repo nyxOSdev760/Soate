@@ -1,19 +1,24 @@
 import SwiftUI
 import UIKit
 
-/// The floating bottom toolbar: Select, Text, Shape, Pen, Image, Sticky, Undo, Redo.
+/// The floating bottom toolbar: Select, Text, Pen, Image, Sticky, Undo, Redo.
 struct MainToolbarView: View {
     @Bindable var viewModel: BoardViewModel
     let onPhotoLibrary: () -> Void
     let onCamera: () -> Void
 
-    @ScaledMetric(relativeTo: .title3) private var buttonSize: CGFloat = 40
+    @ScaledMetric(relativeTo: .title3) private var scaledButtonSize: CGFloat = 40
+
+    /// Capped so all seven tools plus undo/redo always fit on a 375-390 pt
+    /// wide iPhone (7 x 44 + chrome is about 345 pt), even with large text.
+    private var buttonSize: CGFloat {
+        min(max(scaledButtonSize, 36), 44)
+    }
 
     var body: some View {
         HStack(spacing: 2) {
             toolButton(.select, systemImage: "cursorarrow", label: "Select")
             toolButton(.text, systemImage: "textformat", label: "Text")
-            toolButton(.shape, systemImage: viewModel.shapeKind.systemImage, label: "Shape")
             toolButton(.pen, systemImage: viewModel.penKind.systemImage, label: "Pen")
 
             Menu {
@@ -95,14 +100,12 @@ struct ToolOptionsView: View {
     @Bindable var viewModel: BoardViewModel
 
     static func hasOptions(for tool: Tool) -> Bool {
-        tool == .shape || tool == .pen || tool == .sticky
+        tool == .pen || tool == .sticky
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             switch viewModel.tool {
-            case .shape:
-                shapeOptions
             case .pen:
                 penOptions
             case .sticky:
@@ -115,32 +118,6 @@ struct ToolOptionsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
-    }
-
-    private var shapeOptions: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Drag on the board to draw a shape, or tap to place one.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            HStack(spacing: 6) {
-                ForEach(ShapeKind.allCases) { kind in
-                    let isSelected = viewModel.shapeKind == kind
-                    Button {
-                        viewModel.shapeKind = kind
-                    } label: {
-                        Image(systemName: kind.systemImage)
-                            .font(.title3)
-                            .frame(maxWidth: .infinity, minHeight: 40)
-                            .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
-                            .background(isSelected ? Color.accentColor.opacity(0.2) : Color.primary.opacity(0.05),
-                                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(kind.title)
-                    .accessibilityAddTraits(isSelected ? .isSelected : [])
-                }
-            }
-        }
     }
 
     private var penOptions: some View {

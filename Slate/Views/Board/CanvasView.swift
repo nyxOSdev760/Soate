@@ -55,15 +55,12 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
         case moving
         case resizing(corner: Int)
         case rotating
-        case endpoint(isStart: Bool)
-        case creatingShape
         case pendingTap
     }
 
     private enum Handle {
         case corner(Int)
         case rotate
-        case endpoint(isStart: Bool)
     }
 
     private struct HandleHit {
@@ -84,8 +81,6 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
     private var originals: [UUID: BoardObject] = [:]
     private var originalObject: BoardObject?
     private var tappedObjectID: UUID?
-    private var createdShapeID: UUID?
-    private var snapTargetID: UUID?
     private var eraserScreenPoint: CGPoint?
     private var lastLayoutSize: CGSize = .zero
 
@@ -214,18 +209,6 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
             ctx.restoreGState()
         }
 
-        // Snap target highlight.
-        if let snapTargetID, let target = viewModel.object(withID: snapTargetID) {
-            let points = target.worldCorners.map { viewport.toScreen($0) }
-            ctx.saveGState()
-            ctx.setStrokeColor(accent.withAlphaComponent(0.75).cgColor)
-            ctx.setLineWidth(3)
-            ctx.addLines(between: points)
-            ctx.closePath()
-            ctx.strokePath()
-            ctx.restoreGState()
-        }
-
         // Selection outlines and handles.
         let selected = viewModel.board.objects.filter { viewModel.selection.contains($0.id) }
         for object in selected {
@@ -267,35 +250,19 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
 
     private func drawSelectionOutline(for object: BoardObject, viewport: Viewport, accent: UIColor, ctx: CGContext) {
         ctx.saveGState()
-        if let connector = object.connectorContent {
-            let start = viewport.toScreen(connector.start)
-            let end = viewport.toScreen(connector.end)
-            ctx.setStrokeColor(accent.withAlphaComponent(0.35).cgColor)
-            ctx.setLineWidth(max(CGFloat(connector.strokeWidth) * CGFloat(viewport.scale) + 8, 10))
-            ctx.setLineCap(.round)
-            ctx.move(to: start)
-            ctx.addLine(to: end)
-            ctx.strokePath()
-        } else {
-            let points = object.worldCorners.map { viewport.toScreen($0) }
-            ctx.setStrokeColor(accent.cgColor)
-            ctx.setLineWidth(1.5)
-            if object.isLocked {
-                ctx.setLineDash(phase: 0, lengths: [5, 4])
-            }
-            ctx.addLines(between: points)
-            ctx.closePath()
-            ctx.strokePath()
+        let points = object.worldCorners.map { viewport.toScreen($0) }
+        ctx.setStrokeColor(accent.cgColor)
+        ctx.setLineWidth(1.5)
+        if object.isLocked {
+            ctx.setLineDash(phase: 0, lengths: [5, 4])
         }
+        ctx.addLines(between: points)
+        ctx.closePath()
+        ctx.strokePath()
         ctx.restoreGState()
 
         if object.isLocked {
-            let anchor: CGPoint
-            if let connector = object.connectorContent {
-                anchor = viewport.toScreen(connector.start)
-            } else {
-                anchor = viewport.toScreen(object.worldCorners[0])
-            }
+            let anchor = viewport.toScreen(object.worldCorners[0])
             let badge = CGRect(x: anchor.x - 4, y: anchor.y - 26, width: 22, height: 22)
             ctx.saveGState()
             ctx.setFillColor(accent.cgColor)
@@ -308,14 +275,8 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
     }
 
     private func drawHandles(for object: BoardObject, viewport: Viewport, accent: UIColor, ctx: CGContext) {
-        if let connector = object.connectorContent {
-            for point in [connector.start, connector.end] {
-                drawHandleDot(at: viewport.toScreen(point), accent: accent, ctx: ctx)
-            }
-            return
-        }
         let corners = object.worldCorners.map { viewport.toScreen($0) }
-        if object.supportsRotation {
+        do {
             let top = rotationHandleBase(for: object, viewport: viewport)
             let handle = rotationHandlePoint(for: object, viewport: viewport)
             ctx.saveGState()
@@ -364,17 +325,7 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
               !object.isLocked else { return nil }
         let viewport = viewModel.viewport
         let radius = CanvasUIView.handleRadius
-        if let connector = object.connectorContent {
-            let start = viewport.toScreen(connector.start)
-            let end = viewport.toScreen(connector.end)
-            let startDistance = start.distance(to: screen)
-            let endDistance = end.distance(to: screen)
-            if min(startDistance, endDistance) <= radius {
-                return HandleHit(object: object, handle: .endpoint(isStart: startDistance <= endDistance))
-            }
-            return nil
-        }
-        if object.supportsRotation, rotationHandlePoint(for: object, viewport: viewport).distance(to: screen) <= radius {
+        if rotationHandlePoint(for: object, viewport: viewport).distance(to: screen) <= radius {
             return HandleHit(object: object, handle: .rotate)
         }
         let corners = object.worldCorners.map { viewport.toScreen($0) }
@@ -431,10 +382,6 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
             }
         case .select:
             beginSelectInteraction(screen: screen, world: world)
-        case .shape:
-            mode = .creatingShape
-            createdShapeID = nil
-            viewModel.beginInteraction()
         case .text, .sticky:
             mode = .pendingTap
         }
@@ -449,7 +396,6 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
             switch hit.handle {
             case .corner(let index): mode = .resizing(corner: index)
             case .rotate: mode = .rotating
-            case .endpoint(let isStart): mode = .endpoint(isStart: isStart)
             }
             return
         }
@@ -510,18 +456,6 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
             if let originalObject {
                 viewModel.rotate(originalObject, toward: world)
             }
-        case .endpoint(let isStart):
-            if let originalObject {
-                snapTargetID = viewModel.moveConnectorEndpoint(originalObject, isStart: isStart, to: world)
-            }
-        case .creatingShape:
-            if didMove {
-                if let createdShapeID {
-                    snapTargetID = viewModel.updateShapeCreation(id: createdShapeID, from: startWorld, to: world)
-                } else {
-                    createdShapeID = viewModel.beginShapeCreation(kind: viewModel.shapeKind, from: startWorld, to: world)
-                }
-            }
         case .pendingTap, .idle:
             break
         }
@@ -549,15 +483,8 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
             if !didMove, let tappedObjectID, viewModel.selection.count > 1 {
                 viewModel.select([tappedObjectID])
             }
-        case .resizing, .rotating, .endpoint:
+        case .resizing, .rotating:
             viewModel.endInteraction()
-        case .creatingShape:
-            if createdShapeID == nil {
-                viewModel.endInteraction()
-                viewModel.insertDefaultShape(kind: viewModel.shapeKind, at: world)
-            } else {
-                viewModel.finishShapeCreation()
-            }
         case .pendingTap:
             if !didMove {
                 viewModel.handleTap(at: world, tolerance: tolerance)
@@ -575,7 +502,7 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
 
     private func cancelActiveInteraction() {
         switch mode {
-        case .erasing, .moving, .resizing, .rotating, .endpoint, .creatingShape:
+        case .erasing, .moving, .resizing, .rotating:
             viewModel?.cancelInteraction()
         case .idle, .drawing, .lasso, .pendingTap:
             break
@@ -594,8 +521,6 @@ final class CanvasUIView: UIView, UIGestureRecognizerDelegate, UIPencilInteracti
         originals = [:]
         originalObject = nil
         tappedObjectID = nil
-        createdShapeID = nil
-        snapTargetID = nil
         eraserScreenPoint = nil
         overlay.setNeedsDisplay()
     }
