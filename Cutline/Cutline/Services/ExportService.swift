@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import Photos
 import UIKit
 
@@ -161,11 +161,11 @@ final class ExportService: @unchecked Sendable {
             }
         }
 
-        lock.lock()
-        self.reader = reader
-        self.writer = writer
-        let cancelledEarly = isCancelled
-        lock.unlock()
+        let cancelledEarly = lock.withLock {
+            self.reader = reader
+            self.writer = writer
+            return isCancelled
+        }
         if cancelledEarly { throw ExportError.cancelled }
 
         guard writer.startWriting() else { throw ExportError.failed(writer.error?.localizedDescription ?? "writer") }
@@ -213,9 +213,7 @@ final class ExportService: @unchecked Sendable {
             }
         }
 
-        lock.lock()
-        let cancelled = isCancelled
-        lock.unlock()
+        let cancelled = lock.withLock { isCancelled }
         if cancelled || reader.status == .cancelled {
             writer.cancelWriting()
             try? FileManager.default.removeItem(at: url)

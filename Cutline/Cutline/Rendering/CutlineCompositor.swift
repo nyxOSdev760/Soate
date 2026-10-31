@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import CoreImage
 
 /// One instruction covers the whole timeline and carries the render plan.
