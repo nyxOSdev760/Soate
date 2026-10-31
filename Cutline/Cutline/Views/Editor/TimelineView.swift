@@ -512,8 +512,9 @@ struct AudioClipBlock: View {
                     let sourceTime = trimStart + x / pps
                     let index = Int(sourceTime * Double(WaveformGenerator.samplesPerSecond))
                     let amplitude = index >= 0 && index < envelope.count ? CGFloat(envelope[index]) : 0
-                    let height = max(1, amplitude * size.height * 0.85)
-                    path.addRect(CGRect(x: x, y: (size.height - height) / 2, width: 1.5, height: height))
+                    let barHeight: CGFloat = max(1, amplitude * size.height * 0.85)
+                    let barY: CGFloat = (size.height - barHeight) / 2
+                    path.addRect(CGRect(x: CGFloat(x), y: barY, width: 1.5, height: barHeight))
                     x += 3
                 }
                 context.fill(path, with: .color(color.opacity(0.9)))
