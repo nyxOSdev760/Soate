@@ -38,7 +38,8 @@ jobs:
 
       - name: Show compiler errors
         if: failure()
-        run: grep -E "error:|warning: .*(Slate/)" build.log | sort -u | head -150 || true
+        run: |
+          grep -E "error:" build.log | sort -u | head -150 || true
 
       - name: Package Payload into .ipa
         run: |
