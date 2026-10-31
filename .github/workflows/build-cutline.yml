@@ -1,0 +1,71 @@
+name: Build Cutline unsigned IPA
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "Cutline/**"
+      - ".github/workflows/build-cutline.yml"
+      - "!Cutline/dist/**"
+      - "!**.md"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build (unsigned, Release, iphoneos)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Cutline/Cutline.xcodeproj \
+            -scheme Cutline \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean build 2>&1 | tee build.log
+
+      - name: Show compiler errors
+        if: failure()
+        run: |
+          grep -E "error:" build.log | sort -u | head -150 || true
+
+      - name: Package Payload into .ipa
+        run: |
+          rm -rf Payload Cutline/dist
+          mkdir -p Payload Cutline/dist
+          cp -R build/Build/Products/Release-iphoneos/Cutline.app Payload/
+          ditto -c -k --sequesterRsrc --keepParent Payload Cutline/dist/Cutline-unsigned.ipa
+          ls -la Cutline/dist
+          unzip -l Cutline/dist/Cutline-unsigned.ipa | tail -5
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cutline-unsigned-ipa
+          path: Cutline/dist/Cutline-unsigned.ipa
+
+      - name: Commit IPA back to the branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f Cutline/dist/Cutline-unsigned.ipa
+          git commit -m "Add unsigned Cutline.ipa built from ${GITHUB_SHA::7}" || exit 0
+          for attempt in 1 2 3; do
+            git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            sleep 5
+          done
+          exit 1

@@ -1,4 +1,4 @@
-name: Build unsigned IPA
+name: Build Slate unsigned IPA
 
 on:
   push:
@@ -6,6 +6,8 @@ on:
     paths-ignore:
       - "dist/**"
       - "**.md"
+      - "Cutline/**"
+      - ".github/workflows/build-cutline.yml"
   workflow_dispatch:
 
 permissions:
